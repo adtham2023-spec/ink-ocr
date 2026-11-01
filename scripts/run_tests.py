@@ -26,7 +26,10 @@ def main():
         for source in (ROOT/'tests').glob('*.py'):
             shutil.copy2(source, folder/'work'/source.name)
         def run(*arguments):
-            print('RUN', ' '.join(arguments), flush=True)
+            # English Windows runners may expose a cp1252 console. Keep the
+            # harness log printable there while child processes use UTF-8.
+            label = ' '.join(arguments).encode('ascii', errors='backslashreplace').decode('ascii')
+            print('RUN', label, flush=True)
             subprocess.run([sys.executable, *arguments], cwd=folder, env=env, check=True, timeout=240)
         run('work/make_sample.py')
         run('work/make_pdf_sample.py')

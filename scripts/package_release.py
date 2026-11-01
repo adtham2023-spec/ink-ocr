@@ -20,18 +20,19 @@ def main():
         package.mkdir(parents=True, exist_ok=True)
         (package/'PACKAGE.txt').write_text(f'{name}=={dist.version}\n', encoding='utf-8')
         for file in dist.files or []:
-            if any(word in file.name.lower() for word in ('license', 'copying', 'notice')):
+            if any(word in str(file).lower() for word in ('license', 'copying', 'notice')):
                 source = Path(dist.locate_file(file))
                 if source.is_file():
                     target = package/str(file).replace('..', '_')
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, target)
+    shutil.copytree(ROOT/'notices', notices/'upstream', dirs_exist_ok=True)
     # Source is included alongside the dynamic Qt libraries for inspection/rebuilds.
     source_root = APP/'source'
     source_root.mkdir(exist_ok=True)
     for name in ('app.py', 'requirements.txt', 'requirements-dev.txt', 'requirements-lock.txt', *documents):
         shutil.copy2(ROOT/name, source_root/name)
-    for folder in ('scripts', 'assets', 'tests', 'docs', 'examples'):
+    for folder in ('scripts', 'assets', 'tests', 'docs', 'examples', 'notices'):
         shutil.copytree(ROOT/folder, source_root/folder, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns('__pycache__'))
     archive = ROOT/'dist/InkOCR-Windows-x64.zip'

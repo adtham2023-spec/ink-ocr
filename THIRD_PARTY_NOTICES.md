@@ -13,6 +13,6 @@ The MIT license in this repository covers the original Ink OCR application code.
 | NumPy, Pillow, OpenCV, Shapely, pyclipper and other runtime dependencies | Image and geometry processing | See installed package metadata and included notices |
 | PyInstaller | Windows packaging | https://github.com/pyinstaller/pyinstaller |
 
-Windows distributions retain their dynamic library directory and include `third-party-licenses/`, collected from installed package distributions. Source code and build instructions are included with the published distribution. The application does not relicense its dependencies or models as MIT.
+Windows distributions retain their dynamic library directory and include `third-party-licenses/`, collected from installed package distributions, including nested PDFium license directories. Additional upstream license texts are retained in [`notices/`](notices/README.md) and copied into the release. Source code and build instructions are included with the published distribution. The application does not relicense its dependencies or models as MIT.
 
 The examples, icon and screenshots were created for this project. No proprietary ebook pages or personal proofreading projects are included in this repository.

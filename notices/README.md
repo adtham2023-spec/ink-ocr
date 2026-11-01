@@ -4,6 +4,8 @@ These upstream license texts accompany the original application license and pack
 
 | File | Source |
 | --- | --- |
+| Tesseract-Apache-2.0.txt | https://github.com/tesseract-ocr/tessdata_fast/blob/87416418657359cb625c412a48b6e1d6d41c29bd/LICENSE |
+| tesserocr-MIT.txt | https://github.com/sirfz/tesserocr/blob/v2.12.0/LICENSE |
 | RapidOCR-LICENSE.txt | https://raw.githubusercontent.com/RapidAI/RapidOCR/main/LICENSE |
 | PaddleOCR-LICENSE.txt | https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/main/LICENSE |
 | LGPL-3.0.txt | https://www.gnu.org/licenses/lgpl-3.0.txt |

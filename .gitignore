@@ -17,3 +17,5 @@ Thumbs.db
 .DS_Store
 .idea/
 .vscode/
+
+assets/tessdata/*.traineddata

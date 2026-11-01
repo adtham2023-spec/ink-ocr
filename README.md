@@ -38,11 +38,22 @@
 
 ![低分行筛选](docs/screenshots/score-filter.png)
 
+### 调整行序与切换离线引擎
+
+拖拽移动整行，或用按钮修正漏行、多余行和拆行。顶部提供单页旋转和重新识别；下面是切换到内置 Tesseract 后的实际结果。
+
+![行序调整](docs/screenshots/row-order.png)
+![Tesseract 本地识别](docs/screenshots/tesseract.png)
+
 ## 功能特点
 
 | 功能 | 具体行为 |
 | --- | --- |
 | 本地离线识别 | 使用 RapidOCR + ONNX Runtime 在 CPU 上运行；模型随 Windows 发行包提供 |
+| 切换本地引擎 | RapidOCR 与 Tesseract 5 二选一；Tesseract 提供简中＋英文、繁中＋英文及纯英文模型 |
+| 调整行数和顺序 | 拖拽结果行调整阅读顺序；新增、删除或合并相邻行，同步全文与导出 |
+| 单页旋转重识别 | 当前 PDF 页或图片可左／右转 90°，再单独重新识别；不会改写原始文件 |
+| 撤销页面操作 | 行结构调整、旋转和重新识别保留最近 8 次快照，随进度保存，可逐步恢复 |
 | 多页扫描 PDF | 导入后按物理页码列出页面，按需逐页渲染，不预先把整本书转成大图 |
 | 中英文混排 | 处理中文、英文及数字印刷体；效果取决于扫描质量和版面 |
 | 双向定位 | 右侧选行高亮原图；点击原图文字框选中对应识别行 |
@@ -91,10 +102,23 @@ git clone https://github.com/adtham2023-spec/ink-ocr.git
 cd ink-ocr
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe scripts/fetch_tessdata.py
 .\.venv\Scripts\python.exe app.py
 ```
 
 需要重现完整的已验证依赖环境时，用 `requirements-lock.txt` 替代 `requirements.txt`。
+
+源码首次准备 Tesseract 模型需要联网下载官方固定版本，并校验 SHA-256；完成后 OCR 离线运行。Windows 发行包已含两个引擎、三份语言模型及运行库，无需自行下载或安装 Tesseract。
+
+## 修正歪页、错行和阅读顺序
+
+1. 页面横着时，选中该页，点击“左转 90°”或“右转 90°”，直到原图朝向正确。
+2. 选择本地引擎及语言，再点“重新识别当前页”。已有文字会提示替换，可以用“撤销”恢复。
+3. 在逐行纠错列表中拖拽一整行，放到目标行上半部为放在其前，下半部为放在其后。原图定位框随文字一起移动；全文和 TXT 按新顺序输出。
+4. 拆成两行的文字可选第一行后“合并下行”；缺行用“＋ 行”，多余行用“删除行”。合并前需取消低分筛选，避免看不到相邻行。新增行没有置信度或原图定位框。
+5. “撤销”恢复当前页最近一次行结构调整、旋转或重新识别，最多 8 次；文本编辑仍可使用编辑框自身的撤销。
+
+切换引擎只影响之后启动的识别任务。识别全部仍跳过已完成页；比较引擎效果请使用“重新识别当前页”。两种引擎的置信度标尺不同，切换后应重新调整校对阈值。横页应先旋正，旋转本身不会重新排版或重算 OCR。
 
 也可以传入文件路径：
 
@@ -115,6 +139,7 @@ py -3.12 -m venv .venv
 ## 测试
 
 ```powershell
+.\.venv\Scripts\python.exe scripts/fetch_tessdata.py
 .\.venv\Scripts\python.exe scripts/run_tests.py
 # 只运行界面交互回归
 .\.venv\Scripts\python.exe scripts/run_tests.py --suite ui

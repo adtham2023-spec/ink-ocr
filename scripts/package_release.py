@@ -30,7 +30,7 @@ def main():
     # Source is included alongside the dynamic Qt libraries for inspection/rebuilds.
     source_root = APP/'source'
     source_root.mkdir(exist_ok=True)
-    for name in ('app.py', 'requirements.txt', 'requirements-dev.txt', 'requirements-lock.txt', *documents):
+    for name in ('app.py', 'engines.py', 'requirements.txt', 'requirements-dev.txt', 'requirements-lock.txt', *documents):
         shutil.copy2(ROOT/name, source_root/name)
     for folder in ('scripts', 'assets', 'tests', 'docs', 'examples', 'notices'):
         shutil.copytree(ROOT/folder, source_root/folder, dirs_exist_ok=True,

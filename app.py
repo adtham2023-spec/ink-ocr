@@ -7,14 +7,15 @@ import time
 import tempfile
 import threading
 import base64
+from copy import deepcopy
 from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPointF, QPoint, QEvent
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut, QFontDatabase, QFont, QIcon, QPolygonF, QBrush
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPointF, QPoint, QEvent, QMimeData
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QKeySequence, QShortcut, QFontDatabase, QFont, QIcon, QPolygonF, QBrush, QDrag
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QFileDialog, QListWidget, QListWidgetItem,
     QPlainTextEdit, QSplitter, QCheckBox, QProgressBar, QMessageBox, QFrame,
@@ -41,6 +42,11 @@ def source_key(entry):
     return (os.path.normcase(entry['path']), entry.get('page'))
 
 def read_source(source):
+    image = read_source_unrotated(source)
+    rotation = source.get('rotation', 0) if isinstance(source, dict) else 0
+    return np.rot90(image, -(rotation//90)).copy() if rotation else image
+
+def read_source_unrotated(source):
     if not isinstance(source, dict): return read_image(source)
     if source.get('page') is None: return read_image(source['path'])
     import pypdfium2 as pdfium
@@ -57,7 +63,7 @@ def read_source(source):
         finally: page.close()
 
 def source_ref(entry):
-    return {'path': entry['path'], 'page': entry.get('page')}
+    return {'path': entry['path'], 'page': entry.get('page'), 'rotation': entry.get('rotation', 0)}
 
 def configure_fonts(app):
     # Explicit font loading also works on machines with font fallback disabled.
@@ -70,7 +76,10 @@ def read_image(path):
     with Image.open(path) as im:
         return np.asarray(ImageOps.exif_transpose(im).convert('RGB'))[:, :, ::-1].copy()
 
-def make_engine():
+def make_engine(backend='RapidOCR', language='chi_sim+eng'):
+    if backend == 'Tesseract':
+        from engines import TesseractEngine
+        return TesseractEngine(language)
     from rapidocr_onnxruntime import RapidOCR
     return RapidOCR(intra_op_num_threads=4, inter_op_num_threads=1,
                     det_limit_side_len=1280, det_limit_type='max', max_side_len=3600)
@@ -91,10 +100,14 @@ class OCRWorker(QThread):
         super().__init__()
         self.engine = None
         self.jobs = []
+        self.backend = 'RapidOCR'
+        self.language = 'chi_sim+eng'
+        self.engine_key = None
     def run(self):
         try:
-            if self.engine is None:
-                self.engine = make_engine()
+            if self.engine is None or self.engine_key != (self.backend, self.language):
+                self.engine = make_engine(self.backend, self.language)
+                self.engine_key = (self.backend, self.language)
         except Exception as exc:
             for index, _ in self.jobs:
                 self.failure.emit(index, '模型初始化失败：' + str(exc))
@@ -202,6 +215,61 @@ class Preview(QGraphicsView):
 class ReviewTable(QTableWidget):
     navigate = Signal(int)
     editRequested = Signal()
+    rowMoved = Signal(int, int)
+    MIME = 'application/x-inkocr-row'
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.drop_marker = QFrame(self.viewport())
+        self.drop_marker.setStyleSheet('background:#d89537;')
+        self.drop_marker.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.drop_marker.hide()
+        self.drag_scroll = 0
+        self.drag_timer = QTimer(self)
+        self.drag_timer.setInterval(100)
+        self.drag_timer.timeout.connect(self.scroll_drag)
+    def scroll_drag(self):
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.value()+self.drag_scroll)
+    def startDrag(self, actions):
+        if self.state() == QAbstractItemView.State.EditingState: return
+        mime = QMimeData()
+        mime.setData(self.MIME, f'{id(self)}:{self.currentRow()}'.encode())
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.MoveAction)
+    def dragEnterEvent(self, event):
+        if self.valid_drag(event): event.acceptProposedAction()
+        else: event.ignore()
+    def valid_drag(self, event):
+        return self.dragEnabled() and bytes(event.mimeData().data(self.MIME)).startswith(f'{id(self)}:'.encode())
+    def dragMoveEvent(self, event):
+        if not self.valid_drag(event): event.ignore(); return
+        y = int(event.position().y())
+        row = self.rowAt(y)
+        rect = self.visualRect(self.model().index(row, 0)) if row >= 0 else None
+        marker_y = (rect.top() if y <= rect.center().y() else rect.bottom()) if rect else y
+        self.drop_marker.setGeometry(0, max(0, marker_y-1), self.viewport().width(), 3)
+        self.drop_marker.show()
+        self.drop_marker.raise_()
+        self.drag_scroll = -1 if y < 25 else (1 if y > self.viewport().height()-25 else 0)
+        if self.drag_scroll: self.drag_timer.start()
+        else: self.drag_timer.stop()
+        event.acceptProposedAction()
+    def dragLeaveEvent(self, event):
+        self.drag_timer.stop()
+        self.drop_marker.hide()
+        event.accept()
+    def dropEvent(self, event):
+        self.drag_timer.stop()
+        self.drop_marker.hide()
+        if not self.valid_drag(event): event.ignore(); return
+        source = int(bytes(event.mimeData().data(self.MIME)).decode().split(':')[1])
+        target = self.rowAt(int(event.position().y()))
+        if target < 0: target = self.rowCount()
+        elif event.position().y() > self.visualRect(self.model().index(target, 0)).center().y(): target += 1
+        if source < target: target -= 1
+        self.rowMoved.emit(source, target)
+        event.acceptProposedAction()
     def keyPressEvent(self, event):
         if self.state() != QAbstractItemView.State.EditingState and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
@@ -263,7 +331,7 @@ class CorrectionDelegate(QStyledItemDelegate):
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('墨识 Ink OCR 8 · 水平 / 上下对照')
+        self.setWindowTitle('墨识 Ink OCR 9 · 行排序 / 单页旋转 / 双引擎')
         self.resize(1380, 900)
         self.setMinimumSize(940, 620)
         self.setAcceptDrops(True)
@@ -296,7 +364,7 @@ class Window(QMainWindow):
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(26, 24, 26, 18)
-        layout.setSpacing(18)
+        layout.setSpacing(10)
         header = QHBoxLayout()
         title = QLabel('墨识  <span style="color:#8c9689; font-size:18px; font-weight:400">INK OCR</span>')
         title.setStyleSheet('font-size:30px; font-weight:700;')
@@ -346,6 +414,25 @@ class Window(QMainWindow):
         self.project_label.setStyleSheet('color:#74806f;')
         projectbar.addWidget(self.project_label, 1)
         layout.addLayout(projectbar)
+        processing = QHBoxLayout()
+        processing.addWidget(QLabel('本地引擎'))
+        self.engine_combo = QComboBox()
+        self.engine_combo.addItems(['RapidOCR', 'Tesseract'])
+        processing.addWidget(self.engine_combo)
+        self.language_combo = QComboBox()
+        for label, code in [('简中＋英文', 'chi_sim+eng'), ('繁中＋英文', 'chi_tra+eng'), ('英文', 'eng')]:
+            self.language_combo.addItem(label, code)
+        self.language_combo.setEnabled(False)
+        self.engine_combo.currentTextChanged.connect(lambda name: self.language_combo.setEnabled(name == 'Tesseract'))
+        self.engine_combo.currentTextChanged.connect(self.mark_dirty)
+        self.language_combo.currentIndexChanged.connect(self.mark_dirty)
+        processing.addWidget(self.language_combo)
+        processing.addStretch()
+        self.rotate_left_btn = self.button('左转 90°', lambda: self.rotate_page(-90))
+        self.rotate_right_btn = self.button('右转 90°', lambda: self.rotate_page(90))
+        self.rerun_btn = self.button('重新识别当前页', self.rerecognize)
+        for button in (self.rotate_left_btn, self.rotate_right_btn, self.rerun_btn): processing.addWidget(button)
+        layout.addLayout(processing)
         split = QSplitter(Qt.Orientation.Horizontal)
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -444,6 +531,17 @@ class Window(QMainWindow):
         self.table = ReviewTable(0, 3)
         self.correction_delegate = CorrectionDelegate(self.table)
         self.table.setItemDelegateForColumn(2, self.correction_delegate)
+        self.table.setDragEnabled(True)
+        self.table.setAcceptDrops(True)
+        self.table.setDropIndicatorShown(True)
+        self.table.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.table.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.table.rowMoved.connect(self.reorder_line)
+        structure = QHBoxLayout()
+        structure.addWidget(QLabel('拖拽行调整顺序'))
+        for label, callback in [('＋ 行', self.add_line), ('删除行', self.delete_line), ('合并下行', self.merge_line), ('撤销', self.undo_page)]:
+            structure.addWidget(self.button(label, callback))
+        cl.addLayout(structure)
         self.table.navigate.connect(self.move_line)
         self.table.editRequested.connect(self.edit_selected)
         self.correction_delegate.reviewFinished.connect(self.finish_line_edit)
@@ -687,12 +785,13 @@ class Window(QMainWindow):
             return
         entry = self.entries[row]
         try:
-            reset = self.preview_path != source_key(entry)
+            preview_key = (source_key(entry), entry.get('rotation', 0))
+            reset = self.preview_path != preview_key
             if reset:
                 arr = read_source(source_ref(entry))[:, :, ::-1].copy()
                 h, w, _ = arr.shape
                 self.source_pix = QPixmap.fromImage(QImage(arr.data, w, h, 3*w, QImage.Format.Format_RGB888).copy())
-                self.preview_path = source_key(entry)
+                self.preview_path = preview_key
             w, h = self.source_pix.width(), self.source_pix.height()
             self.preview.set_document(self.source_pix, entry.get('lines', []), self.box_check.isChecked(), reset)
             self.preview.highlight(self.current_line, center=False)
@@ -879,18 +978,112 @@ class Window(QMainWindow):
         self.loading = False
         self.line_selected(item.row())
         self.mark_dirty()
-    def start(self, only_current=False):
+    def page_snapshot(self):
+        entry = self.entries[self.files.currentRow()]
+        fields = ('text', 'lines', 'boxes', 'state', 'rotation', 'ocr_engine', 'ocr_language')
+        entry.setdefault('history', []).append({k: deepcopy(entry.get(k)) for k in fields})
+        entry['history'] = entry['history'][-8:]
+    def commit_structure(self, selected=0):
+        row = self.files.currentRow()
+        entry = self.entries[row]
+        entry['text'] = '\n'.join(line['text'] for line in entry.get('lines', []))
+        entry['state'] = f"已完成 · {len(entry.get('lines', []))} 行 · 已校对"
+        self.files.item(row).setText(entry_label(entry)+'\n'+entry['state'])
+        self.select(row)
+        if entry.get('lines'): self.pick_line(max(0, min(selected, len(entry['lines'])-1)))
+        self.mark_dirty()
+    def reorder_line(self, source, target):
+        if self.worker.isRunning() or self.files.currentRow() < 0: return
+        lines = self.entries[self.files.currentRow()].get('lines', [])
+        if source == target or not (0 <= source < len(lines) and 0 <= target < len(lines)): return
+        self.page_snapshot()
+        lines.insert(target, lines.pop(source))
+        self.commit_structure(target)
+    def add_line(self):
+        if self.worker.isRunning() or self.files.currentRow() < 0: return
+        self.page_snapshot()
+        lines = self.entries[self.files.currentRow()].setdefault('lines', [])
+        index = self.current_line+1 if self.current_line >= 0 else len(lines)
+        lines.insert(index, dict(text='', original=None, confidence=None, box=None))
+        self.commit_structure(index)
+        self.edit_selected()
+    def delete_line(self):
+        if self.worker.isRunning() or self.files.currentRow() < 0 or self.current_line < 0: return
+        self.page_snapshot()
+        index = self.current_line
+        self.entries[self.files.currentRow()]['lines'].pop(index)
+        self.commit_structure(index)
+    def merge_line(self):
+        if self.worker.isRunning() or self.files.currentRow() < 0: return
+        if self.low_only.isChecked():
+            self.status.setText('合并前请取消“只校对低分行”，以便看清相邻行。'); return
+        lines = self.entries[self.files.currentRow()].get('lines', [])
+        index = self.current_line
+        if not 0 <= index < len(lines)-1: return
+        self.page_snapshot()
+        a, b = lines[index:index+2]
+        box = None
+        if a['box'] is not None and b['box'] is not None:
+            points = np.asarray(a['box']+b['box'])
+            x, y = points.min(axis=0); right, bottom = points.max(axis=0)
+            box = [[float(x),float(y)],[float(right),float(y)],[float(right),float(bottom)],[float(x),float(bottom)]]
+        scores = (a['confidence'], b['confidence'])
+        lines[index:index+2] = [dict(text=(a['text']+' '+b['text']).strip(),
+            original='\n'.join(v for v in (a['original'], b['original']) if v is not None) or None,
+            confidence=min(scores) if None not in scores else None, box=box)]
+        self.commit_structure(index)
+    def undo_page(self):
+        if self.worker.isRunning() or self.files.currentRow() < 0: return
+        row = self.files.currentRow()
+        entry = self.entries[row]
+        if not entry.get('history'): self.status.setText('当前页没有可撤销的行操作或重新识别。'); return
+        for key, value in entry['history'].pop().items():
+            if value is None: entry.pop(key, None)
+            else: entry[key] = value
+        self.files.item(row).setText(entry_label(entry)+'\n'+entry['state'])
+        self.select(row)
+        self.mark_dirty()
+    def rotate_page(self, delta):
+        if self.worker.isRunning() or self.files.currentRow() < 0: return
+        self.page_snapshot()
+        entry = self.entries[self.files.currentRow()]
+        width, height = self.source_pix.width(), self.source_pix.height()
+        def transform(box):
+            return [[height-1-y, x] if delta > 0 else [y, width-1-x] for x, y in box]
+        for line in entry.get('lines', []):
+            if line['box'] is not None: line['box'] = transform(line['box'])
+        for box in entry.get('boxes', []): box[0] = transform(box[0])
+        entry['rotation'] = (entry.get('rotation', 0)+delta)%360
+        self.update_preview()
+        if self.current_line >= 0: self.line_selected(self.current_line)
+        self.mark_dirty()
+        self.status.setText(f"当前页旋转 {entry['rotation']}°；可点击“重新识别当前页”。原 PDF 不会改写。")
+    def rerecognize(self):
+        if self.worker.isRunning() or self.files.currentRow() < 0: return
+        entry = self.entries[self.files.currentRow()]
+        if entry.get('text') and QMessageBox.question(self, '重新识别当前页',
+                '将用当前引擎重新识别并替换本页文字，之后可点击“撤销”恢复。继续？',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes: return
+        self.page_snapshot()
+        self.start(True, force=True)
+    def start(self, only_current=False, force=False):
         if self.worker.isRunning(): return
         if not self.entries:
             self.status.setText('请先导入 PDF 或图片。')
             return
         jobs = [(i, source_ref(e)) for i, e in enumerate(self.entries)
                 if (not only_current or i == self.files.currentRow())
-                and (e['state'] == '待识别' or e['state'].startswith('失败'))]
+                and (force or e['state'] == '待识别' or e['state'].startswith('失败'))]
         if not jobs:
             self.status.setText('所选页面已识别，可直接校对。已完成页面不会重复识别或覆盖修改。')
             return
         self.worker.jobs = jobs
+        self.worker.backend = self.engine_combo.currentText()
+        self.worker.language = self.language_combo.currentData()
+        self.engine_combo.setEnabled(False)
+        self.language_combo.setEnabled(False)
+        self.table.setDragEnabled(False)
         for btn in (self.add_btn, self.paste_btn, self.current_btn, self.run_btn, self.clear_btn, self.open_project_btn): btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.simplify_check.setEnabled(False)
@@ -914,6 +1107,8 @@ class Window(QMainWindow):
             self.on_error(index, '繁转简失败：'+str(exc))
             return
         entry.update(result)
+        entry['ocr_engine'] = self.worker.backend
+        entry['ocr_language'] = self.worker.language
         entry['lines'] = lines
         entry['text'] = '\n'.join(line['text'] for line in lines)
         n = len(entry['boxes'])
@@ -924,11 +1119,14 @@ class Window(QMainWindow):
         self.status.setText(f'正在处理 · {entry_label(entry)} 已完成')
     def on_error(self, index, error):
         entry = self.entries[index]
-        entry['state'] = '失败：' + error
-        self.files.item(index).setText(entry_label(entry) + '\n识别失败（可重试）')
+        entry['state'] = ('已保留原文 · 重识别失败：' if entry.get('lines') else '失败：') + error
+        self.files.item(index).setText(entry_label(entry) + '\n' + entry['state'])
         if self.files.currentRow() == index: self.update_preview()
         self.mark_dirty()
     def done(self):
+        self.engine_combo.setEnabled(True)
+        self.language_combo.setEnabled(self.engine_combo.currentText() == 'Tesseract')
+        self.table.setDragEnabled(True)
         for btn in (self.add_btn, self.paste_btn, self.current_btn, self.run_btn, self.clear_btn, self.open_project_btn): btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.simplify_check.setEnabled(True)
@@ -1025,6 +1223,8 @@ class Window(QMainWindow):
                        'settings': {'simplify_after_ocr': self.simplify_check.isChecked(),
                                     'score_threshold': self.score_threshold.value(),
                                     'low_only': self.low_only.isChecked(),
+                                    'engine': self.engine_combo.currentText(),
+                                    'language': self.language_combo.currentData(),
                                     'comparison_mode': 'vertical' if self.comparison_mode.currentIndex() == 1 else 'horizontal'}}
             # Replace atomically: interrupted writes never overwrite the last good save.
             target = Path(path)
@@ -1088,6 +1288,8 @@ class Window(QMainWindow):
                 page = record.get('page')
                 if page is not None and (type(page) is not int or checked[source] is None or not 0 <= page < checked[source]):
                     raise ValueError('PDF 页码超出原文件范围。')
+                if type(record.get('rotation', 0)) is not int or record.get('rotation', 0) not in (0, 90, 180, 270):
+                    raise ValueError('页面旋转角度无效。')
                 if not isinstance(record.get('state'), str): raise ValueError('缺少页面识别状态。')
                 for line in record.get('lines', []):
                     if not isinstance(line.get('text'), str): raise ValueError('校对行数据无效。')
@@ -1107,6 +1309,9 @@ class Window(QMainWindow):
             self.comparison_mode.blockSignals(True)
             self.comparison_mode.setCurrentIndex(1 if data.get('settings', {}).get('comparison_mode') == 'vertical' else 0)
             self.comparison_mode.blockSignals(False)
+            self.engine_combo.setCurrentText(data.get('settings', {}).get('engine', 'RapidOCR'))
+            language_index = self.language_combo.findData(data.get('settings', {}).get('language', 'chi_sim+eng'))
+            self.language_combo.setCurrentIndex(max(0, language_index))
             self.change_comparison_layout(persist=False)
             self.files.blockSignals(True)
             self.files.clear()
@@ -1146,7 +1351,8 @@ def main():
         socket.socket.connect = blocked
         socket.create_connection = blocked
         pos = sys.argv.index('--self-test')
-        result = recognize(make_engine(), sys.argv[pos+1])
+        backend = 'Tesseract' if '--tesseract' in sys.argv else 'RapidOCR'
+        result = recognize(make_engine(backend), sys.argv[pos+1])
         result['simplified_text'] = to_simplified(result['text'])
         Path(sys.argv[pos+2]).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         return
@@ -1157,6 +1363,7 @@ def main():
     window.show()
     if '--smoke-test' in sys.argv:
         pos = sys.argv.index('--smoke-test')
+        if '--tesseract' in sys.argv: window.engine_combo.setCurrentText('Tesseract')
         window.add_files([sys.argv[pos+1]])
         window.start()
         def capture():

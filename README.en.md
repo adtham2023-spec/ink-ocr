@@ -10,6 +10,10 @@ Ink OCR is a Windows desktop application that connects each recognized text line
 
 ## Features
 
+- Choose bundled RapidOCR or Tesseract 5; Tesseract supports Simplified Chinese + English, Traditional Chinese + English, and English.
+- Rotate individual pages in 90° steps and explicitly re-recognize the current page, with replacement confirmation.
+- Drag result rows to change reading order; insert, delete or merge rows. Complete line records retain their source regions.
+- Undo the last 8 page structure, rotation or re-recognition actions. Snapshots and page rotation persist in progress files; the original PDF stays intact.
 - Import multi-page scanned PDFs and common image formats. PDF pages are rendered on demand.
 - Click a result line to highlight its source; click an image text region to select the matching result.
 - Choose horizontal, eye-line-aligned magnification or a vertical original-above-result layout.
@@ -31,6 +35,7 @@ git clone https://github.com/adtham2023-spec/ink-ocr.git
 cd ink-ocr
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe scripts/fetch_tessdata.py
 .\.venv\Scripts\python.exe app.py
 ```
 

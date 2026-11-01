@@ -8,7 +8,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-UI = ['test_correction.py', 'test_alignment.py', 'test_keyboard.py', 'test_comparison_modes.py']
+UI = ['test_correction.py', 'test_alignment.py', 'test_keyboard.py', 'test_comparison_modes.py', 'test_page_tools.py']
 INTEGRATION = ['test_app.py', 'test_pdf.py', 'test_book_v4.py', 'test_score_filter.py']
 
 def main():
@@ -23,6 +23,8 @@ def main():
         (folder/'work').mkdir()
         (folder/'outputs').mkdir()
         shutil.copy2(ROOT/'app.py', folder/'work/app.py')
+        shutil.copy2(ROOT/'engines.py', folder/'work/engines.py')
+        shutil.copytree(ROOT/'assets/tessdata', folder/'work/assets/tessdata')
         for source in (ROOT/'tests').glob('*.py'):
             shutil.copy2(source, folder/'work'/source.name)
         def run(*arguments):

@@ -5,6 +5,8 @@ The MIT license in this repository covers the original Ink OCR application code.
 | Component | Role | Upstream |
 | --- | --- | --- |
 | RapidOCR / rapidocr-onnxruntime | OCR pipeline and bundled model resources | https://github.com/RapidAI/RapidOCR |
+| tesserocr (MIT) / Tesseract / Leptonica | Second local engine, bundled native libraries and their notices | https://github.com/sirfz/tesserocr |
+| tessdata_fast (Apache-2.0) | English, Simplified Chinese and Traditional Chinese language models, pinned by commit and SHA-256 | https://github.com/tesseract-ocr/tessdata_fast |
 | PaddleOCR | Underlying PP-OCR model family used by RapidOCR resources | https://github.com/PaddlePaddle/PaddleOCR |
 | ONNX Runtime | Local model inference | https://github.com/microsoft/onnxruntime |
 | PySide6 / Qt | Desktop UI and dynamic Qt libraries | https://code.qt.io/cgit/pyside/pyside-setup.git/ |

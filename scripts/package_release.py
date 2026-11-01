@@ -8,8 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT/'dist/InkOCR'
 def main():
     if not (APP/'InkOCR.exe').exists(): raise SystemExit('Build dist/InkOCR/InkOCR.exe first.')
-    for name in ('LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md'):
+    documents = ('LICENSE', 'README.md', 'README.en.md', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md', 'CONTRIBUTING.md')
+    for name in documents:
         shutil.copy2(ROOT/name, APP/name)
+    for folder in ('docs', 'examples'):
+        shutil.copytree(ROOT/folder, APP/folder, dirs_exist_ok=True)
     notices = APP/'third-party-licenses'
     for dist in metadata.distributions():
         name = dist.metadata.get('Name', 'unknown')
@@ -26,9 +29,9 @@ def main():
     # Source is included alongside the dynamic Qt libraries for inspection/rebuilds.
     source_root = APP/'source'
     source_root.mkdir(exist_ok=True)
-    for name in ('app.py', 'requirements.txt', 'requirements-dev.txt', 'requirements-lock.txt', 'LICENSE'):
+    for name in ('app.py', 'requirements.txt', 'requirements-dev.txt', 'requirements-lock.txt', *documents):
         shutil.copy2(ROOT/name, source_root/name)
-    for folder in ('scripts', 'assets', 'tests'):
+    for folder in ('scripts', 'assets', 'tests', 'docs', 'examples'):
         shutil.copytree(ROOT/folder, source_root/folder, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns('__pycache__'))
     archive = ROOT/'dist/InkOCR-Windows-x64.zip'
